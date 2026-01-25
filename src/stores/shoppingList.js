@@ -149,6 +149,24 @@ export const useShoppingListStore = defineStore('shoppingList', () => {
     }
   }
 
+  function reorderActiveItems(reorderedList) {
+    // Switch to manual sort when user drags
+    sortOrder.value = 'none'
+
+    // Get the new order of IDs
+    const reorderedIds = reorderedList.map((item) => item.id)
+
+    // Get completed items (unchanged)
+    const completed = items.value.filter((item) => item.completed)
+
+    // Reorder active items according to the new order
+    const active = items.value.filter((item) => !item.completed)
+    active.sort((a, b) => reorderedIds.indexOf(a.id) - reorderedIds.indexOf(b.id))
+
+    // Rebuild: active items first, then completed
+    items.value = [...active, ...completed]
+  }
+
   return {
     items,
     activeItems,
@@ -161,5 +179,6 @@ export const useShoppingListStore = defineStore('shoppingList', () => {
     setCategoryFilter,
     deleteItem,
     updateItem,
+    reorderActiveItems,
   }
 })
