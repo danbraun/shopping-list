@@ -2,6 +2,7 @@
 import { ref, computed, nextTick, onUnmounted } from 'vue'
 import { useShoppingListStore } from './stores/shoppingList'
 
+
 const store = useShoppingListStore()
 
 // Local component state for the form
@@ -13,11 +14,19 @@ const editingId = ref(null)
 const editingName = ref('')
 const editingCategory = ref('')
 
+// Screen reader announcements
+const announcement = ref('')
+function announce(message) {
+  announcement.value = ''
+  nextTick(() => {
+    announcement.value = message
+  })
+}
+
 // ============================================
 // CUSTOM DRAG & DROP SYSTEM
 // ============================================
-// Vue concept: We use refs for reactive state that the template responds to,
-// and regular variables for internal tracking that doesn't need reactivity.
+// Supports both mouse and touch interactions
 
 // Reactive state (template will update when these change)
 const draggedItem = ref(null)      // The item being dragged
@@ -26,9 +35,11 @@ const dropIndex = ref(-1)          // Where the item will be dropped (for visual
 // Non-reactive tracking (internal use only)
 let draggedIndex = -1              // Original index of dragged item
 let dragClone = null               // The floating clone element
-let dragStartY = 0                 // Mouse Y when drag started
+let dragStartY = 0                 // Pointer Y when drag started
+let cloneStartTop = 0              // Initial top position for the clone
 let itemHeight = 0                 // Height of each item for position calculations
 let listTop = 0                    // Top of the list for calculating drop position
+let isTouchDrag = false            // Track if current drag is touch-based
 
 // Computed: items with a "gap" inserted where we'll drop
 // Vue concept: computed() creates a derived value that auto-updates when dependencies change
@@ -53,9 +64,17 @@ function startEditing(item) {
   editingId.value = item.id
   editingName.value = item.name
   editingCategory.value = item.category
+  announce(`Editing ${item.name}`)
   nextTick(() => {
     document.querySelector('.edit-input')?.focus()
   })
+}
+
+function handleItemKeydown(event, item) {
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault()
+    startEditing(item)
+  }
 }
 
 function saveEdit() {
@@ -79,24 +98,8 @@ function handleEditKeydown(event) {
   }
 }
 
-// Start dragging when user presses on the handle
-function startDrag(event, item, index) {
-  // Prevent text selection while dragging
-  event.preventDefault()
-
-  // Store what we're dragging
-  draggedItem.value = item
-  draggedIndex = index
-  dragStartY = event.clientY
-
-  // Get the list element to calculate positions
-  const listEl = event.target.closest('ul')
-  const itemEl = event.target.closest('li')
-  listTop = listEl.getBoundingClientRect().top
-  itemHeight = itemEl.offsetHeight
-
-  // Create a floating clone of the item
-  // Vue concept: Sometimes you need direct DOM manipulation for visual effects
+// Create the visual clone for dragging
+function createDragClone(itemEl) {
   dragClone = itemEl.cloneNode(true)
   dragClone.classList.add('drag-clone')
   const rect = itemEl.getBoundingClientRect()
@@ -104,31 +107,71 @@ function startDrag(event, item, index) {
   dragClone.style.left = rect.left + 'px'
   dragClone.style.top = rect.top + 'px'
   dragClone.style.width = rect.width + 'px'
+  cloneStartTop = rect.top
   document.body.appendChild(dragClone)
-
-  // Set initial drop index
-  dropIndex.value = index
-
-  // Listen for mouse movement on the whole document
-  // Vue concept: For drag operations, we attach listeners to document
-  // so dragging continues even if mouse leaves the element
-  document.addEventListener('mousemove', onDrag)
-  document.addEventListener('mouseup', endDrag)
 }
 
-// Called continuously as the mouse moves
+// Get clientY from pointer or touch event
+function getClientY(event) {
+  if (event.touches && event.touches.length > 0) {
+    return event.touches[0].clientY
+  }
+  return event.clientY
+}
+
+// Start dragging when user presses on the handle
+function startDrag(event, item, index) {
+  // Ignore if drag is already in progress
+  if (draggedItem.value !== null) {
+    return
+  }
+
+  // Prevent text selection and default behavior
+  event.preventDefault()
+
+  // Determine if this is a touch interaction
+  isTouchDrag = event.type === 'touchstart' || event.pointerType === 'touch'
+
+  // Get the list element to calculate positions
+  const listEl = event.target.closest('ul')
+  const itemEl = event.target.closest('li')
+  listTop = listEl.getBoundingClientRect().top
+  itemHeight = itemEl.offsetHeight
+  dragStartY = getClientY(event)
+
+  // Start drag immediately
+  draggedIndex = index
+  createDragClone(itemEl)
+  draggedItem.value = item
+  dropIndex.value = index
+
+  // Add event listeners for both pointer and touch events
+  document.addEventListener('pointermove', onDrag)
+  document.addEventListener('pointerup', endDrag)
+  document.addEventListener('pointercancel', endDrag)
+  document.addEventListener('touchmove', onDrag, { passive: false })
+  document.addEventListener('touchend', endDrag)
+  document.addEventListener('touchcancel', endDrag)
+
+  announce(`Grabbed ${item.name}. Use arrow keys or drag to reorder.`)
+}
+
+// Called continuously as the pointer/touch moves
 function onDrag(event) {
   if (!dragClone) return
 
-  // Move the clone vertically (Y-axis only - this is the key!)
-  const deltaY = event.clientY - dragStartY
-  const startTop = parseFloat(dragClone.style.top) || 0
-  dragClone.style.top = (startTop + deltaY) + 'px'
-  dragStartY = event.clientY  // Update for next frame
+  // Prevent scrolling on touch devices while dragging
+  event.preventDefault()
+
+  const clientY = getClientY(event)
+
+  // Move the clone vertically using absolute position from start
+  const deltaY = clientY - dragStartY
+  dragClone.style.top = (cloneStartTop + deltaY) + 'px'
 
   // Calculate which position we're hovering over
-  const mouseY = event.clientY - listTop
-  let newDropIndex = Math.floor(mouseY / itemHeight)
+  const pointerY = clientY - listTop
+  let newDropIndex = Math.floor(pointerY / itemHeight)
 
   // Clamp to valid range
   const maxIndex = store.activeItems.length - 1
@@ -138,11 +181,15 @@ function onDrag(event) {
   dropIndex.value = newDropIndex
 }
 
-// Called when mouse is released
+// Called when pointer/touch is released
 function endDrag() {
-  // Remove document listeners
-  document.removeEventListener('mousemove', onDrag)
-  document.removeEventListener('mouseup', endDrag)
+  // Remove all document listeners
+  document.removeEventListener('pointermove', onDrag)
+  document.removeEventListener('pointerup', endDrag)
+  document.removeEventListener('pointercancel', endDrag)
+  document.removeEventListener('touchmove', onDrag)
+  document.removeEventListener('touchend', endDrag)
+  document.removeEventListener('touchcancel', endDrag)
 
   // Remove the floating clone
   if (dragClone) {
@@ -151,141 +198,217 @@ function endDrag() {
   }
 
   // Perform the actual reorder if position changed
-  if (draggedItem.value && dropIndex.value !== draggedIndex) {
-    // Build new order: remove from old position, insert at new
-    const newOrder = store.activeItems.filter(item => item.id !== draggedItem.value.id)
-    newOrder.splice(dropIndex.value, 0, draggedItem.value)
+  const movedItem = draggedItem.value
+  if (movedItem && dropIndex.value !== draggedIndex) {
+    const newOrder = store.activeItems.filter(item => item.id !== movedItem.id)
+    newOrder.splice(dropIndex.value, 0, movedItem)
     store.reorderActiveItems(newOrder)
+    announce(`${movedItem.name} moved to position ${dropIndex.value + 1}`)
+  } else if (movedItem) {
+    announce(`${movedItem.name} dropped in original position`)
   }
 
-  // Reset drag state
+  resetDragState()
+}
+
+// Reset all drag state variables
+function resetDragState() {
   draggedItem.value = null
   dropIndex.value = -1
   draggedIndex = -1
+  isTouchDrag = false
+  cloneStartTop = 0
+}
+
+// Keyboard-based reordering for accessibility
+function handleDragKeydown(event, item, index) {
+  if (event.key === 'ArrowUp' && index > 0) {
+    event.preventDefault()
+    const newOrder = [...store.activeItems]
+    newOrder.splice(index, 1)
+    newOrder.splice(index - 1, 0, item)
+    store.reorderActiveItems(newOrder)
+    announce(`${item.name} moved up to position ${index}`)
+    // Keep focus on the moved item
+    nextTick(() => {
+      const handles = document.querySelectorAll('.drag-handle')
+      handles[index - 1]?.focus()
+    })
+  } else if (event.key === 'ArrowDown' && index < store.activeItems.length - 1) {
+    event.preventDefault()
+    const newOrder = [...store.activeItems]
+    newOrder.splice(index, 1)
+    newOrder.splice(index + 1, 0, item)
+    store.reorderActiveItems(newOrder)
+    announce(`${item.name} moved down to position ${index + 2}`)
+    // Keep focus on the moved item
+    nextTick(() => {
+      const handles = document.querySelectorAll('.drag-handle')
+      handles[index + 1]?.focus()
+    })
+  }
 }
 
 // Cleanup if component unmounts during drag
-// Vue concept: onUnmounted lifecycle hook for cleanup
 onUnmounted(() => {
-  document.removeEventListener('mousemove', onDrag)
-  document.removeEventListener('mouseup', endDrag)
+  document.removeEventListener('pointermove', onDrag)
+  document.removeEventListener('pointerup', endDrag)
+  document.removeEventListener('pointercancel', endDrag)
+  document.removeEventListener('touchmove', onDrag)
+  document.removeEventListener('touchend', endDrag)
+  document.removeEventListener('touchcancel', endDrag)
   if (dragClone) dragClone.remove()
+  resetDragState()
 })
 </script>
 
 <template>
   <div class="container">
-    <h1>Shopping List</h1>
-
-    <!-- Add new item form -->
-    <form @submit.prevent="handleAddItem" class="add-form">
-      <input v-model="newItemName" type="text" placeholder="Add an item..." />
-      <select v-model="newItemCategory">
-        <option v-for="category in store.categories" :key="category" :value="category">
-          {{ category }}
-        </option>
-      </select>
-      <button type="submit">Add</button>
-    </form>
-
-    <!-- Sort and filter controls -->
-    <div class="controls">
-      <label>
-        Sort:
-        <select :value="store.sortOrder" @change="store.setSortOrder($event.target.value)">
-          <option value="none">Manual order</option>
-          <option value="category">By category</option>
-          <option value="a-z">A to Z</option>
-          <option value="z-a">Z to A</option>
-        </select>
-      </label>
-
-      <label>
-        Filter:
-        <select
-          :value="store.categoryFilter"
-          @change="store.setCategoryFilter($event.target.value)"
-        >
-          <option value="all">All categories</option>
-          <option v-for="category in store.categories" :key="category" :value="category">
-            {{ category }}
-          </option>
-        </select>
-      </label>
+    <!-- Screen reader announcements -->
+    <div role="status" aria-live="polite" aria-atomic="true" class="sr-only">
+      {{ announcement }}
     </div>
 
-    <!-- Active items with custom drag & drop -->
-    <!-- Vue concept: v-for iterates over displayItems (which includes the drop placeholder) -->
-    <ul class="item-list">
-      <li
-        v-for="(item, index) in displayItems"
-        :key="item.id"
-        :class="{
+    <header>
+      <h1>Shopping List</h1>
+    </header>
+
+    <main>
+      <!-- Add new item form -->
+      <form @submit.prevent="handleAddItem" class="add-form" aria-label="Add new item">
+        <div class="form-field">
+          <label for="new-item-name" class="sr-only">Item name</label>
+          <input id="new-item-name" v-model="newItemName" type="text" placeholder="Add an item..." autocomplete="off" />
+        </div>
+        <div class="form-field">
+          <label for="new-item-category" class="sr-only">Category</label>
+          <select id="new-item-category" v-model="newItemCategory">
+            <option v-for="category in store.categories" :key="category" :value="category">
+              {{ category }}
+            </option>
+          </select>
+        </div>
+        <button type="submit">Add</button>
+      </form>
+
+      <!-- Sort and filter controls -->
+      <div class="controls" role="group" aria-label="List controls">
+        <div class="control-field">
+          <label for="sort-select">Sort:</label>
+          <select id="sort-select" :value="store.sortOrder" @change="store.setSortOrder($event.target.value)">
+            <option value="none">Manual order</option>
+            <option value="category">By category</option>
+            <option value="a-z">A to Z</option>
+            <option value="z-a">Z to A</option>
+          </select>
+        </div>
+
+        <div class="control-field">
+          <label for="filter-select">Filter:</label>
+          <select id="filter-select" :value="store.categoryFilter"
+            @change="store.setCategoryFilter($event.target.value)">
+            <option value="all">All categories</option>
+            <option v-for="category in store.categories" :key="category" :value="category">
+              {{ category }}
+            </option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Active items with custom drag & drop -->
+      <ul class="item-list" aria-label="Shopping items">
+        <li v-for="(item, index) in displayItems" :key="item.id" :class="{
           'drop-placeholder': item.isPlaceholder,
           'is-dragging': draggedItem?.id === item.id
-        }"
-      >
-        <!-- Placeholder shows where item will drop -->
-        <template v-if="item.isPlaceholder">
-          <div class="placeholder-content"></div>
-        </template>
-
-        <!-- Regular item -->
-        <template v-else>
-          <!-- Vue concept: @mousedown.prevent starts drag, .prevent stops text selection -->
-          <span
-            class="drag-handle"
-            @mousedown="startDrag($event, item, index)"
-          >⠿</span>
-          <input type="checkbox" v-model="item.completed" />
-
-          <!-- Editing mode -->
-          <template v-if="editingId === item.id">
-            <input
-              v-model="editingName"
-              class="edit-input"
-              @keydown="handleEditKeydown"
-            />
-            <select v-model="editingCategory" class="edit-category" @keydown="handleEditKeydown">
-              <option v-for="category in store.categories" :key="category" :value="category">
-                {{ category }}
-              </option>
-            </select>
-            <button class="save-btn" @click="saveEdit">Save</button>
+        }">
+          <!-- Placeholder shows where item will drop -->
+          <template v-if="item.isPlaceholder">
+            <div class="placeholder-content" aria-hidden="true"></div>
           </template>
 
-          <!-- Display mode -->
+          <!-- Regular item -->
           <template v-else>
-            <span class="item-name" @click="startEditing(item)">{{ item.name }}</span>
-            <span class="category-tag">{{ item.category }}</span>
+            <!-- Drag handle with keyboard and pointer support -->
+            <div
+              role="button"
+              tabindex="0"
+              class="drag-handle"
+              :aria-label="`Reorder ${item.name}. Use arrow keys to move.`"
+              @pointerdown="startDrag($event, item, index)"
+              @touchstart="startDrag($event, item, index)"
+              @keydown="handleDragKeydown($event, item, index)"
+            >⠿</div>
+
+            <input type="checkbox" :id="`item-${item.id}`" v-model="item.completed"
+              :aria-label="`Mark ${item.name} as ${item.completed ? 'incomplete' : 'complete'}`" />
+
+            <!-- Editing mode -->
+            <template v-if="editingId === item.id">
+              <label :for="`edit-name-${item.id}`" class="sr-only">Edit item name</label>
+              <input :id="`edit-name-${item.id}`" v-model="editingName" class="edit-input"
+                @keydown="handleEditKeydown" />
+              <label :for="`edit-category-${item.id}`" class="sr-only">Edit category</label>
+              <select :id="`edit-category-${item.id}`" v-model="editingCategory" class="edit-category"
+                @keydown="handleEditKeydown">
+                <option v-for="category in store.categories" :key="category" :value="category">
+                  {{ category }}
+                </option>
+              </select>
+              <button class="save-btn" @click="saveEdit">Save</button>
+              <button type="button" class="cancel-btn" @click="cancelEdit">Cancel</button>
+            </template>
+
+            <!-- Display mode -->
+            <template v-else>
+              <span class="item-name" role="button" tabindex="0"
+                :aria-label="`${item.name}. Click or press Enter to edit.`" @click="startEditing(item)"
+                @keydown="handleItemKeydown($event, item)">{{ item.name }}</span>
+              <span class="category-tag" aria-label="Category">{{ item.category }}</span>
+            </template>
+
+            <button type="button" class="delete-btn" :aria-label="`Delete ${item.name}`"
+              @click="store.deleteItem(item.id)">×</button>
           </template>
-
-          <button class="delete-btn" @click="store.deleteItem(item.id)">×</button>
-        </template>
-      </li>
-    </ul>
-
-    <!-- Empty state -->
-    <p v-if="store.activeItems.length === 0" class="empty-state">No items to show.</p>
-
-    <!-- Completed items (not draggable) -->
-    <div v-if="store.completedItems.length > 0" class="completed-section">
-      <h2>Completed</h2>
-      <ul>
-        <li v-for="item in store.completedItems" :key="item.id">
-          <label>
-            <input type="checkbox" v-model="item.completed" />
-            <span class="completed-text">{{ item.name }}</span>
-            <span class="category-tag">{{ item.category }}</span>
-          </label>
-          <button class="delete-btn" @click="store.deleteItem(item.id)">×</button>
         </li>
       </ul>
-    </div>
+
+      <!-- Empty state -->
+      <p v-if="store.activeItems.length === 0" class="empty-state">No items to show.</p>
+
+      <!-- Completed items (not draggable) -->
+      <section v-if="store.completedItems.length > 0" class="completed-section" aria-label="Completed items">
+        <h2>Completed</h2>
+        <ul>
+          <li v-for="item in store.completedItems" :key="item.id">
+            <input type="checkbox" :id="`completed-${item.id}`" v-model="item.completed"
+              :aria-label="`Mark ${item.name} as incomplete`" />
+            <label :for="`completed-${item.id}`" class="completed-label">
+              <span class="completed-text">{{ item.name }}</span>
+              <span class="category-tag" aria-label="Category">{{ item.category }}</span>
+            </label>
+            <button type="button" class="delete-btn" :aria-label="`Delete ${item.name}`"
+              @click="store.deleteItem(item.id)">×</button>
+          </li>
+        </ul>
+      </section>
+    </main>
   </div>
 </template>
 
 <style scoped>
+/* Screen reader only - visually hidden but accessible */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .container {
   max-width: 500px;
   margin: 0 auto;
@@ -293,67 +416,115 @@ onUnmounted(() => {
   font-family: system-ui, sans-serif;
 }
 
+header h1 {
+  margin-top: 0;
+}
+
 .completed-section {
   margin-top: 30px;
   padding-top: 20px;
-  border-top: 1px solid #ccc;
+  border-top: 1px solid #767676;
 }
 
 .completed-section h2 {
   font-size: 1rem;
-  color: #666;
+  color: #545454;
 }
 
 .completed-text {
   text-decoration: line-through;
-  color: #888;
+  color: #545454;
+}
+
+.completed-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
 }
 
 .add-form {
   display: flex;
   gap: 10px;
   margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.form-field {
+  flex: 1;
+  min-width: 120px;
 }
 
 .add-form input {
-  flex: 1;
-  padding: 8px;
+  width: 100%;
+  padding: 12px;
   font-size: 1rem;
+  border: 1px solid #545454;
+  border-radius: 4px;
+  box-sizing: border-box;
 }
 
 .add-form select {
-  padding: 8px;
+  width: 100%;
+  padding: 12px;
   font-size: 1rem;
+  border: 1px solid #545454;
+  border-radius: 4px;
+  box-sizing: border-box;
 }
 
 .add-form button {
-  padding: 8px 16px;
+  padding: 12px 20px;
   font-size: 1rem;
   cursor: pointer;
+  min-height: 44px;
+  border: none;
+  background-color: #1565c0;
+  color: white;
+  border-radius: 4px;
+}
+
+.add-form button:hover {
+  background-color: #0d47a1;
 }
 
 .controls {
   display: flex;
   gap: 20px;
   margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.control-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.control-field label {
+  color: #1a1a1a;
+  font-weight: 500;
 }
 
 .controls select {
-  padding: 4px 8px;
+  padding: 8px 12px;
   font-size: 1rem;
+  border: 1px solid #545454;
+  border-radius: 4px;
+  min-height: 44px;
 }
 
 .category-tag {
   margin-left: 8px;
-  padding: 2px 6px;
+  padding: 4px 8px;
   background-color: #e0e0e0;
   border-radius: 4px;
   font-size: 0.75rem;
-  color: #666;
+  color: #1a1a1a;
 }
 
 .empty-state {
-  color: #888;
+  color: #545454;
   font-style: italic;
 }
 
@@ -369,28 +540,50 @@ li {
   gap: 8px;
   padding: 8px 4px;
   transition: transform 0.15s ease;
-}
-
-li label {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  min-height: 44px;
 }
 
 .drag-handle {
   cursor: grab;
-  color: #999;
-  padding: 4px;
+  color: #545454;
+  padding: 10px;
   user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-size: 1.25rem;
+  min-width: 44px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
 }
 
 .drag-handle:hover {
-  color: #666;
+  color: #1a1a1a;
+  background-color: #f0f0f0;
+}
+
+.drag-handle:focus {
+  outline: 2px solid #1565c0;
+  outline-offset: 2px;
+  color: #1a1a1a;
 }
 
 .drag-handle:active {
   cursor: grabbing;
+}
+
+/* Checkbox styling for better touch targets */
+li input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: #1565c0;
 }
 
 /* Item being dragged in the list (faded out) */
@@ -401,79 +594,228 @@ li label {
 /* Drop placeholder - shows where item will land */
 .drop-placeholder {
   background-color: #e3f2fd;
-  border: 2px dashed #90caf9;
+  border: 2px dashed #1565c0;
   border-radius: 4px;
 }
 
 .placeholder-content {
-  height: 20px;  /* Approximate height of item content */
+  height: 28px;
 }
 
 .delete-btn {
   background: none;
-  border: none;
-  color: #999;
-  font-size: 1.25rem;
+  border: 1px solid transparent;
+  color: #545454;
+  font-size: 1.5rem;
   cursor: pointer;
-  padding: 0 8px;
+  padding: 8px;
+  min-width: 44px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
 }
 
 .delete-btn:hover {
-  color: #e53935;
+  color: #c62828;
+  background-color: #ffebee;
+}
+
+.delete-btn:focus {
+  outline: 2px solid #1565c0;
+  outline-offset: 2px;
 }
 
 .item-name {
   cursor: pointer;
-  padding: 2px 4px;
-  border-radius: 3px;
+  padding: 8px;
+  border-radius: 4px;
   flex: 1;
+  min-height: 24px;
+  display: flex;
+  align-items: center;
 }
 
 .item-name:hover {
   background-color: #f0f0f0;
 }
 
+.item-name:focus {
+  outline: 2px solid #1565c0;
+  outline-offset: 2px;
+  background-color: #f0f0f0;
+}
+
 .edit-input {
   flex: 1;
-  padding: 4px 8px;
+  padding: 8px 12px;
   font-size: 1rem;
-  border: 1px solid #2196f3;
-  border-radius: 3px;
-  outline: none;
+  border: 2px solid #1565c0;
+  border-radius: 4px;
+  min-height: 40px;
+}
+
+.edit-input:focus {
+  outline: 2px solid #1565c0;
+  outline-offset: 2px;
 }
 
 .edit-category {
-  padding: 4px;
+  padding: 8px;
   font-size: 0.875rem;
-  border: 1px solid #2196f3;
-  border-radius: 3px;
+  border: 2px solid #1565c0;
+  border-radius: 4px;
+  min-height: 40px;
+}
+
+.edit-category:focus {
+  outline: 2px solid #1565c0;
+  outline-offset: 2px;
 }
 
 .save-btn {
-  padding: 4px 8px;
+  padding: 8px 16px;
   font-size: 0.875rem;
-  background-color: #2196f3;
+  background-color: #1565c0;
   color: white;
   border: none;
-  border-radius: 3px;
+  border-radius: 4px;
   cursor: pointer;
+  min-height: 40px;
 }
 
 .save-btn:hover {
-  background-color: #1976d2;
+  background-color: #0d47a1;
 }
 
+.save-btn:focus {
+  outline: 2px solid #1a1a1a;
+  outline-offset: 2px;
+}
+
+.cancel-btn {
+  padding: 8px 16px;
+  font-size: 0.875rem;
+  background-color: #f5f5f5;
+  color: #1a1a1a;
+  border: 1px solid #545454;
+  border-radius: 4px;
+  cursor: pointer;
+  min-height: 40px;
+}
+
+.cancel-btn:hover {
+  background-color: #e0e0e0;
+}
+
+.cancel-btn:focus {
+  outline: 2px solid #1565c0;
+  outline-offset: 2px;
+}
+
+/* Focus visible for keyboard users */
+*:focus-visible {
+  outline: 2px solid #1565c0;
+  outline-offset: 2px;
+}
+
+/* Responsive design for mobile */
+@media (max-width: 480px) {
+  .container {
+    padding: 16px;
+  }
+
+  .add-form {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .form-field {
+    width: 100%;
+    min-width: unset;
+  }
+
+  .add-form button {
+    width: 100%;
+  }
+
+  .controls {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .control-field {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .control-field select {
+    flex: 1;
+    max-width: 200px;
+  }
+
+  li {
+    flex-wrap: nowrap;
+    padding: 12px 4px;
+  }
+
+  li:has(.edit-input) {
+    flex-wrap: wrap;
+  }
+
+  .item-name {
+    flex-basis: calc(100% - 140px);
+  }
+
+  .category-tag {
+    margin-left: 0;
+    margin-top: 4px;
+  }
+
+  .edit-input {
+    flex-basis: 100%;
+    margin-bottom: 8px;
+  }
+
+  .edit-category {
+    flex: 1;
+  }
+}
 </style>
 
 <style>
+/* Ensure page is scrollable on mobile */
+html, body {
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 /* Global styles for the floating drag clone (appended to body) */
 .drag-clone {
   background-color: #e3f2fd !important;
   border-radius: 4px !important;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3) !important;
   list-style: none !important;
   z-index: 1000;
-  pointer-events: none;  /* Don't interfere with mouse events */
+  pointer-events: none;
   opacity: 0.95;
+}
+
+/* Ensure consistent focus styles globally */
+*:focus {
+  outline: 2px solid #1565c0;
+  outline-offset: 2px;
+}
+
+/* Remove default outline for mouse users, keep for keyboard */
+*:focus:not(:focus-visible) {
+  outline: none;
+}
+
+*:focus-visible {
+  outline: 2px solid #1565c0;
+  outline-offset: 2px;
 }
 </style>
