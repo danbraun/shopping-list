@@ -42,3 +42,41 @@ npm run build
 ```sh
 npm run lint
 ```
+
+## Note: a fix was applied in order to make Claude for Chrome browser extension available to Claude Code:
+
+What you disabled:
+The native messaging host file enables communication between the Claude browser extension and Claude Desktop (the native app). By renaming it, you've broken that
+connection.
+
+What still works:
+
+- Claude Code (this CLI) connects to the browser extension via a different mechanism (WebSocket), which is why it's working now
+
+What you may have lost:
+
+- Any browser integration features that Claude Desktop provides (if you use it)
+- The conflict likely occurred because both Claude Desktop and Claude Code were trying to control the extension simultaneously
+
+Should you reverse it?
+
+- If you don't use Claude Desktop's browser features, no immediate concern
+- If you do use Claude Desktop with the browser, you'll want to restore it when you're done with Claude Code
+
+I ran:
+
+```sh
+mv ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/com.anthropic.claude_browser_extension.json \
+~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/com.anthropic.claude_browser_extension.json.b
+# oops, i used '.b' instead of the conventional '.bak'
+```
+
+To restore later:
+
+```sh
+mv ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/com.anthropic.claude_browser_extension.json.b \
+~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/com.anthropic.claude_browser_extension.json
+```
+
+The underlying issue is that Claude Desktop and Claude Code both want to talk to the same extension. This is a known conflict - you may need to swap between them
+depending on which tool you're using.
