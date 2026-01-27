@@ -4,7 +4,7 @@ import { defineStore } from 'pinia'
 const STORAGE_KEY = 'shopping-list-items'
 
 // Predefined categories - ordered by typical store layout
-const CATEGORIES = ['Produce', 'Bakery', 'Dairy', 'Meat', 'Frozen', 'Pantry', 'Beverages', 'Other']
+const CATEGORIES = ['Produce', 'Bakery', 'Dairy', 'Meat', 'Frozen', 'Pantry', 'Beverages', 'Bathroom', 'Fitness', 'Bulk', 'Other']
 
 export const useShoppingListStore = defineStore('shoppingList', () => {
   // Load initial data from localStorage, or use defaults

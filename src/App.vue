@@ -274,23 +274,6 @@ onUnmounted(() => {
     </header>
 
     <main>
-      <!-- Add new item form -->
-      <form @submit.prevent="handleAddItem" class="add-form" aria-label="Add new item">
-        <div class="form-field">
-          <label for="new-item-name" class="sr-only">Item name</label>
-          <input id="new-item-name" v-model="newItemName" type="text" placeholder="Add an item..." autocomplete="off" />
-        </div>
-        <div class="form-field">
-          <label for="new-item-category" class="sr-only">Category</label>
-          <select id="new-item-category" v-model="newItemCategory">
-            <option v-for="category in store.categories" :key="category" :value="category">
-              {{ category }}
-            </option>
-          </select>
-        </div>
-        <button type="submit">Add</button>
-      </form>
-
       <!-- Sort and filter controls -->
       <div class="controls" role="group" aria-label="List controls">
         <div class="control-field">
@@ -316,7 +299,7 @@ onUnmounted(() => {
       </div>
 
       <!-- Active items with custom drag & drop -->
-      <ul class="item-list" aria-label="Shopping items">
+      <TransitionGroup name="list" tag="ul" class="item-list" aria-label="Shopping items">
         <li v-for="(item, index) in displayItems" :key="item.id" :class="{
           'drop-placeholder': item.isPlaceholder,
           'is-dragging': draggedItem?.id === item.id
@@ -329,15 +312,10 @@ onUnmounted(() => {
           <!-- Regular item -->
           <template v-else>
             <!-- Drag handle with keyboard and pointer support -->
-            <div
-              role="button"
-              tabindex="0"
-              class="drag-handle"
+            <div role="button" tabindex="0" class="drag-handle"
               :aria-label="`Reorder ${item.name}. Use arrow keys to move.`"
-              @pointerdown="startDrag($event, item, index)"
-              @touchstart="startDrag($event, item, index)"
-              @keydown="handleDragKeydown($event, item, index)"
-            >⠿</div>
+              @pointerdown="startDrag($event, item, index)" @touchstart="startDrag($event, item, index)"
+              @keydown="handleDragKeydown($event, item, index)">⠿</div>
 
             <input type="checkbox" :id="`item-${item.id}`" v-model="item.completed"
               :aria-label="`Mark ${item.name} as ${item.completed ? 'incomplete' : 'complete'}`" />
@@ -363,14 +341,15 @@ onUnmounted(() => {
               <span class="item-name" role="button" tabindex="0"
                 :aria-label="`${item.name}. Click or press Enter to edit.`" @click="startEditing(item)"
                 @keydown="handleItemKeydown($event, item)">{{ item.name }}</span>
-              <span class="category-tag" aria-label="Category">{{ item.category }}</span>
+              <span class="category-tag" :class="'category-' + item.category.toLowerCase()" aria-label="Category">{{
+                item.category }}</span>
             </template>
 
             <button type="button" class="delete-btn" :aria-label="`Delete ${item.name}`"
               @click="store.deleteItem(item.id)">×</button>
           </template>
         </li>
-      </ul>
+      </TransitionGroup>
 
       <!-- Empty state -->
       <p v-if="store.activeItems.length === 0" class="empty-state">No items to show.</p>
@@ -378,24 +357,64 @@ onUnmounted(() => {
       <!-- Completed items (not draggable) -->
       <section v-if="store.completedItems.length > 0" class="completed-section" aria-label="Completed items">
         <h2>Completed</h2>
-        <ul>
+        <TransitionGroup name="list" tag="ul">
           <li v-for="item in store.completedItems" :key="item.id">
             <input type="checkbox" :id="`completed-${item.id}`" v-model="item.completed"
               :aria-label="`Mark ${item.name} as incomplete`" />
             <label :for="`completed-${item.id}`" class="completed-label">
               <span class="completed-text">{{ item.name }}</span>
-              <span class="category-tag" aria-label="Category">{{ item.category }}</span>
+              <span class="category-tag" :class="'category-' + item.category.toLowerCase()" aria-label="Category">{{
+                item.category }}</span>
             </label>
             <button type="button" class="delete-btn" :aria-label="`Delete ${item.name}`"
               @click="store.deleteItem(item.id)">×</button>
           </li>
-        </ul>
+        </TransitionGroup>
       </section>
+
+      <!-- Add new item form -->
+      <form @submit.prevent="handleAddItem" class="add-form" aria-label="Add new item">
+        <div class="form-field">
+          <label for="new-item-name" class="sr-only">Item name</label>
+          <input id="new-item-name" v-model="newItemName" type="text" placeholder="Add an item..." autocomplete="off" />
+        </div>
+        <div class="form-field">
+          <label for="new-item-category" class="sr-only">Category</label>
+          <select id="new-item-category" v-model="newItemCategory">
+            <option v-for="category in store.categories" :key="category" :value="category">
+              {{ category }}
+            </option>
+          </select>
+        </div>
+        <button type="submit">Add</button>
+      </form>
     </main>
   </div>
 </template>
 
 <style scoped>
+/* List transition animations */
+.list-move,
+.list-enter-active,
+.list-leave-active {
+  transition: all 0.3s ease;
+}
+
+.list-enter-from {
+  opacity: 0;
+  transform: translateY(-20px);
+}
+
+.list-leave-to {
+  opacity: 0;
+}
+
+/* Leaving items are taken out of flow so remaining items animate smoothly */
+.list-leave-active {
+  position: absolute;
+  width: calc(100% - 8px);
+}
+
 /* Screen reader only - visually hidden but accessible */
 .sr-only {
   position: absolute;
@@ -413,22 +432,26 @@ onUnmounted(() => {
   max-width: 500px;
   margin: 0 auto;
   padding: 20px;
-  font-family: system-ui, sans-serif;
+  font-family: 'Barlow Condensed', system-ui, sans-serif;
+  color: #f5f0ff;
 }
 
 header h1 {
   margin-top: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: 0.5px;
 }
 
 .completed-section {
   margin-top: 30px;
   padding-top: 20px;
-  border-top: 1px solid #767676;
+  border-top: 1px solid rgba(255, 255, 255, 0.3);
 }
 
 .completed-section h2 {
   font-size: 1rem;
-  color: #545454;
+  color: #d4c4f0;
 }
 
 .completed-text {
@@ -446,7 +469,9 @@ header h1 {
 .add-form {
   display: flex;
   gap: 10px;
-  margin-bottom: 20px;
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.3);
   flex-wrap: wrap;
 }
 
@@ -457,8 +482,8 @@ header h1 {
 
 .add-form input {
   width: 100%;
-  padding: 12px;
-  font-size: 1rem;
+  padding: 8px 10px;
+  font-size: 0.95rem;
   border: 1px solid #545454;
   border-radius: 4px;
   box-sizing: border-box;
@@ -466,18 +491,18 @@ header h1 {
 
 .add-form select {
   width: 100%;
-  padding: 12px;
-  font-size: 1rem;
+  padding: 8px 10px;
+  font-size: 0.95rem;
   border: 1px solid #545454;
   border-radius: 4px;
   box-sizing: border-box;
 }
 
 .add-form button {
-  padding: 12px 20px;
-  font-size: 1rem;
+  padding: 8px 16px;
+  font-size: 0.95rem;
   cursor: pointer;
-  min-height: 44px;
+  min-height: 36px;
   border: none;
   background-color: #1565c0;
   color: white;
@@ -502,7 +527,7 @@ header h1 {
 }
 
 .control-field label {
-  color: #1a1a1a;
+  color: #f5f0ff;
   font-weight: 500;
 }
 
@@ -515,16 +540,72 @@ header h1 {
 }
 
 .category-tag {
-  margin-left: 8px;
-  padding: 4px 8px;
+  margin-left: 4px;
+  padding: 2px 6px;
   background-color: #e0e0e0;
   border-radius: 4px;
-  font-size: 0.75rem;
+  font-size: 0.7rem;
+  color: #1a1a1a;
+}
+
+/* Category colors - pastel palette (WCAG AA 4.5:1 contrast) */
+.category-produce {
+  background-color: #c8e6c9;
+  color: #1b5e20;
+}
+
+.category-bakery {
+  background-color: #ffe0b2;
+  color: #7a3d00;
+}
+
+.category-dairy {
+  background-color: #bbdefb;
+  color: #0d47a1;
+}
+
+.category-meat {
+  background-color: #ffcdd2;
+  color: #8e0000;
+}
+
+.category-frozen {
+  background-color: #e0f7fa;
+  color: #004d54;
+}
+
+.category-pantry {
+  background-color: #fff9c4;
+  color: #6d5c00;
+}
+
+.category-beverages {
+  background-color: #e1bee7;
+  color: #4a0072;
+}
+
+.category-bathroom {
+  background-color: #d7ccc8;
+  color: #3e2723;
+}
+
+.category-fitness {
+  background-color: #ffccbc;
+  color: #7a2000;
+}
+
+.category-bulk {
+  background-color: #cfd8dc;
+  color: #263238;
+}
+
+.category-other {
+  background-color: #e0e0e0;
   color: #1a1a1a;
 }
 
 .empty-state {
-  color: #545454;
+  color: #d4c4f0;
   font-style: italic;
 }
 
@@ -532,30 +613,35 @@ ul {
   list-style: none;
   padding: 0;
   margin: 0;
+  position: relative;
 }
 
 li {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 4px;
+  gap: 4px;
+  padding: 8px 10px;
   transition: transform 0.15s ease;
-  min-height: 44px;
+  min-height: 36px;
+  background-color: rgba(255, 255, 255, 0.85);
+  border-radius: 8px;
+  margin-bottom: 4px;
+  color: #1a1a1a;
 }
 
 .drag-handle {
   cursor: grab;
   color: #545454;
-  padding: 10px;
+  padding: 6px 2px 6px 6px;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
   background: none;
   border: 1px solid transparent;
   border-radius: 4px;
-  font-size: 1.25rem;
-  min-width: 44px;
-  min-height: 44px;
+  font-size: 1rem;
+  min-width: 28px;
+  min-height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -577,11 +663,11 @@ li {
   cursor: grabbing;
 }
 
-/* Checkbox styling for better touch targets */
+/* Checkbox styling */
 li input[type="checkbox"] {
-  width: 20px;
-  height: 20px;
-  margin: 0;
+  width: 18px;
+  height: 18px;
+  margin: 0 12px 0 0;
   cursor: pointer;
   accent-color: #1565c0;
 }
@@ -599,18 +685,18 @@ li input[type="checkbox"] {
 }
 
 .placeholder-content {
-  height: 28px;
+  height: 20px;
 }
 
 .delete-btn {
   background: none;
   border: 1px solid transparent;
   color: #545454;
-  font-size: 1.5rem;
+  font-size: 1.25rem;
   cursor: pointer;
-  padding: 8px;
-  min-width: 44px;
-  min-height: 44px;
+  padding: 4px;
+  min-width: 28px;
+  min-height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -629,12 +715,13 @@ li input[type="checkbox"] {
 
 .item-name {
   cursor: pointer;
-  padding: 8px;
+  padding: 4px 6px;
   border-radius: 4px;
   flex: 1;
-  min-height: 24px;
+  min-height: 20px;
   display: flex;
   align-items: center;
+  font-size: 0.95rem;
 }
 
 .item-name:hover {
@@ -757,7 +844,7 @@ li input[type="checkbox"] {
 
   li {
     flex-wrap: nowrap;
-    padding: 12px 4px;
+    padding: 4px;
   }
 
   li:has(.edit-input) {
@@ -786,21 +873,34 @@ li input[type="checkbox"] {
 
 <style>
 /* Ensure page is scrollable on mobile */
-html, body {
+html,
+body {
   overflow-x: hidden;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  min-height: 100vh;
+}
+
+body {
+  background: linear-gradient(135deg,
+      #1a0a2e 0%,
+      #2d1b4e 35%,
+      #4a2c6a 70%,
+      #6b4c8a 100%);
+  background-attachment: fixed;
+  margin: 0;
 }
 
 /* Global styles for the floating drag clone (appended to body) */
 .drag-clone {
-  background-color: #e3f2fd !important;
-  border-radius: 4px !important;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3) !important;
+  background-color: rgba(255, 255, 255, 0.95) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4) !important;
   list-style: none !important;
   z-index: 1000;
   pointer-events: none;
-  opacity: 0.95;
+  font-family: 'Barlow Condensed', system-ui, sans-serif;
+  color: #1a1a1a;
 }
 
 /* Ensure consistent focus styles globally */
