@@ -2,7 +2,6 @@
 import { ref, computed, nextTick, onUnmounted } from 'vue'
 import { useShoppingListStore } from './stores/shoppingList'
 
-
 const store = useShoppingListStore()
 
 // Local component state for the form
@@ -26,31 +25,38 @@ function announce(message) {
 // ============================================
 // CUSTOM DRAG & DROP SYSTEM
 // ============================================
-// Supports both mouse and touch interactions
+// Supports both mouse and touch interactions - NO CLONING
 
 // Reactive state (template will update when these change)
 const draggedItem = ref(null)      // The item being dragged
 const dropIndex = ref(-1)          // Where the item will be dropped (for visual gap)
+const draggedItemHeight = ref(0)   // Height of dragged item (for placeholder)
+const draggedItemWidth = ref(0)    // Width of dragged item
+const dragTop = ref(0)             // Current top position for fixed positioning
+const dragLeft = ref(0)            // Current left position for fixed positioning
+const justDroppedId = ref(null)    // ID of item that was just dropped (to skip animation)
 
 // Non-reactive tracking (internal use only)
 let draggedIndex = -1              // Original index of dragged item
-let dragClone = null               // The floating clone element
+let draggedEl = null               // Reference to the actual dragged DOM element
 let dragStartY = 0                 // Pointer Y when drag started
-let cloneStartTop = 0              // Initial top position for the clone
-let itemHeight = 0                 // Height of each item for position calculations
-let listTop = 0                    // Top of the list for calculating drop position
-let isTouchDrag = false            // Track if current drag is touch-based
+let pointerOffsetY = 0             // Offset from top of item where pointer grabbed
+let itemStartTop = 0               // Initial top position of the item
+let itemHeight = 0                 // Height of dragged item (internal use)
+const DRAG_DEADZONE = 15           // Pixels to move before position detection starts
 
-// Computed: items with a "gap" inserted where we'll drop
-// Vue concept: computed() creates a derived value that auto-updates when dependencies change
+// Computed: items with placeholder inserted at drop position
 const displayItems = computed(() => {
   const items = [...store.activeItems]
   if (draggedItem.value && dropIndex.value >= 0) {
-    // Remove dragged item from its original position
-    const filtered = items.filter(item => item.id !== draggedItem.value.id)
-    // Insert a placeholder at drop position
-    filtered.splice(dropIndex.value, 0, { id: 'drop-placeholder', isPlaceholder: true })
-    return filtered
+    // Insert placeholder at drop position (dragged item is rendered with position:fixed, so needs placeholder for space)
+    const placeholder = { id: 'drop-placeholder', isPlaceholder: true }
+    // Adjust insertion point based on whether we're moving up or down
+    if (dropIndex.value > draggedIndex) {
+      items.splice(dropIndex.value + 1, 0, placeholder)
+    } else {
+      items.splice(dropIndex.value, 0, placeholder)
+    }
   }
   return items
 })
@@ -98,19 +104,6 @@ function handleEditKeydown(event) {
   }
 }
 
-// Create the visual clone for dragging
-function createDragClone(itemEl) {
-  dragClone = itemEl.cloneNode(true)
-  dragClone.classList.add('drag-clone')
-  const rect = itemEl.getBoundingClientRect()
-  dragClone.style.position = 'fixed'
-  dragClone.style.left = rect.left + 'px'
-  dragClone.style.top = rect.top + 'px'
-  dragClone.style.width = rect.width + 'px'
-  cloneStartTop = rect.top
-  document.body.appendChild(dragClone)
-}
-
 // Get clientY from pointer or touch event
 function getClientY(event) {
   if (event.touches && event.touches.length > 0) {
@@ -129,21 +122,30 @@ function startDrag(event, item, index) {
   // Prevent text selection and default behavior
   event.preventDefault()
 
-  // Determine if this is a touch interaction
-  isTouchDrag = event.type === 'touchstart' || event.pointerType === 'touch'
-
-  // Get the list element to calculate positions
-  const listEl = event.target.closest('ul')
+  // Get the item element
   const itemEl = event.target.closest('li')
-  listTop = listEl.getBoundingClientRect().top
-  itemHeight = itemEl.offsetHeight
-  dragStartY = getClientY(event)
+  const itemRect = itemEl.getBoundingClientRect()
 
-  // Start drag immediately
+  itemHeight = itemEl.offsetHeight
+  draggedItemHeight.value = itemHeight
+  draggedItemWidth.value = itemEl.offsetWidth
+  itemStartTop = itemRect.top
+  dragStartY = getClientY(event)
+  pointerOffsetY = dragStartY - itemRect.top
+
+  // Set initial fixed position (where item currently is)
+  dragTop.value = itemRect.top
+  dragLeft.value = itemRect.left
+
+  // Store reference to actual DOM element
+  draggedEl = itemEl
   draggedIndex = index
-  createDragClone(itemEl)
   draggedItem.value = item
   dropIndex.value = index
+  justDroppedId.value = null
+
+  // Set grabbing cursor on body during drag
+  document.body.style.cursor = 'grabbing'
 
   // Add event listeners for both pointer and touch events
   document.addEventListener('pointermove', onDrag)
@@ -158,26 +160,65 @@ function startDrag(event, item, index) {
 
 // Called continuously as the pointer/touch moves
 function onDrag(event) {
-  if (!dragClone) return
+  if (!draggedEl) return
 
   // Prevent scrolling on touch devices while dragging
   event.preventDefault()
 
   const clientY = getClientY(event)
 
-  // Move the clone vertically using absolute position from start
-  const deltaY = clientY - dragStartY
-  dragClone.style.top = (cloneStartTop + deltaY) + 'px'
+  // Update fixed position - item follows pointer
+  dragTop.value = clientY - pointerOffsetY
 
-  // Calculate which position we're hovering over
-  const pointerY = clientY - listTop
-  let newDropIndex = Math.floor(pointerY / itemHeight)
+  // Calculate delta from start for deadzone check
+  const deltaY = clientY - dragStartY
+
+  // Don't change drop position until we've moved past the deadzone
+  if (Math.abs(deltaY) < DRAG_DEADZONE) {
+    return
+  }
+
+  // Item edges relative to viewport (using fixed position)
+  const itemCurrentTop = dragTop.value
+  const itemCurrentBottom = itemCurrentTop + itemHeight
+
+  // Get all non-placeholder, non-dragging items from DOM with their positions
+  const listEl = document.querySelector('.item-list')
+  if (!listEl) return
+
+  const allItems = listEl.querySelectorAll('li:not(.drop-placeholder):not(.is-dragging)')
+  const itemData = []
+
+  for (const li of allItems) {
+    const rect = li.getBoundingClientRect()
+    itemData.push({
+      center: rect.top + rect.height / 2,
+      top: rect.top,
+      bottom: rect.bottom
+    })
+  }
+
+  const maxIndex = store.activeItems.length - 1
+
+  // Determine movement direction based on item position vs starting position
+  const originalCenter = itemStartTop + itemHeight / 2
+  const currentCenter = itemCurrentTop + itemHeight / 2
+  const movingDown = currentCenter > originalCenter
+
+  // Pure hit detection: count items whose center is above the relevant edge
+  // Moving down: use bottom edge (items shuffle up when bottom crosses their center)
+  // Moving up: use top edge (items shuffle down when top crosses their center)
+  const relevantEdge = movingDown ? itemCurrentBottom : itemCurrentTop
+
+  let newDropIndex = 0
+  for (let i = 0; i < itemData.length; i++) {
+    if (relevantEdge > itemData[i].center) {
+      newDropIndex = i + 1
+    }
+  }
 
   // Clamp to valid range
-  const maxIndex = store.activeItems.length - 1
   newDropIndex = Math.max(0, Math.min(newDropIndex, maxIndex))
-
-  // Update drop position (Vue reactivity will update the display)
   dropIndex.value = newDropIndex
 }
 
@@ -191,33 +232,62 @@ function endDrag() {
   document.removeEventListener('touchend', endDrag)
   document.removeEventListener('touchcancel', endDrag)
 
-  // Remove the floating clone
-  if (dragClone) {
-    dragClone.remove()
-    dragClone = null
-  }
+  // Reset cursor
+  document.body.style.cursor = ''
 
-  // Perform the actual reorder if position changed
   const movedItem = draggedItem.value
-  if (movedItem && dropIndex.value !== draggedIndex) {
+  const finalDropIndex = dropIndex.value
+  const positionChanged = movedItem && finalDropIndex !== draggedIndex
+
+  if (positionChanged) {
+    // Mark this item as just dropped to skip TransitionGroup animation
+    justDroppedId.value = movedItem.id
+
+    // Update store with new order
     const newOrder = store.activeItems.filter(item => item.id !== movedItem.id)
-    newOrder.splice(dropIndex.value, 0, movedItem)
+    newOrder.splice(finalDropIndex, 0, movedItem)
     store.reorderActiveItems(newOrder)
-    announce(`${movedItem.name} moved to position ${dropIndex.value + 1}`)
+    announce(`${movedItem.name} moved to position ${finalDropIndex + 1}`)
+
+    // Clear just-dropped flag after animation frame
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        justDroppedId.value = null
+      })
+    })
   } else if (movedItem) {
     announce(`${movedItem.name} dropped in original position`)
   }
 
-  resetDragState()
+  // Reset drag state (but not justDroppedId - that clears separately)
+  draggedItem.value = null
+  dropIndex.value = -1
+  draggedItemHeight.value = 0
+  draggedItemWidth.value = 0
+  dragTop.value = 0
+  dragLeft.value = 0
+  draggedIndex = -1
+  draggedEl = null
+  itemStartTop = 0
+  itemHeight = 0
+  pointerOffsetY = 0
 }
 
 // Reset all drag state variables
 function resetDragState() {
   draggedItem.value = null
   dropIndex.value = -1
+  draggedItemHeight.value = 0
+  draggedItemWidth.value = 0
+  dragTop.value = 0
+  dragLeft.value = 0
+  justDroppedId.value = null
   draggedIndex = -1
-  isTouchDrag = false
-  cloneStartTop = 0
+  draggedEl = null
+  itemStartTop = 0
+  itemHeight = 0
+  pointerOffsetY = 0
+  document.body.style.cursor = ''
 }
 
 // Keyboard-based reordering for accessibility
@@ -257,7 +327,6 @@ onUnmounted(() => {
   document.removeEventListener('touchmove', onDrag)
   document.removeEventListener('touchend', endDrag)
   document.removeEventListener('touchcancel', endDrag)
-  if (dragClone) dragClone.remove()
   resetDragState()
 })
 </script>
@@ -302,11 +371,16 @@ onUnmounted(() => {
       <TransitionGroup name="list" tag="ul" class="item-list" aria-label="Shopping items">
         <li v-for="(item, index) in displayItems" :key="item.id" :class="{
           'drop-placeholder': item.isPlaceholder,
-          'is-dragging': draggedItem?.id === item.id
-        }">
-          <!-- Placeholder shows where item will drop -->
+          'is-dragging': draggedItem?.id === item.id,
+          'just-dropped': justDroppedId === item.id
+        }" :style="item.isPlaceholder
+          ? { height: draggedItemHeight + 'px', padding: 0, minHeight: 'auto' }
+          : draggedItem?.id === item.id
+            ? { position: 'fixed', top: dragTop + 'px', left: dragLeft + 'px', width: draggedItemWidth + 'px', zIndex: 1000, margin: 0 }
+            : {}">
+          <!-- Invisible placeholder for animation -->
           <template v-if="item.isPlaceholder">
-            <div class="placeholder-content" aria-hidden="true"></div>
+            <span aria-hidden="true"></span>
           </template>
 
           <!-- Regular item -->
@@ -480,22 +554,23 @@ header h1 {
   min-width: 120px;
 }
 
-.add-form input {
-  width: 100%;
-  padding: 8px 10px;
-  font-size: 0.95rem;
-  border: 1px solid #545454;
-  border-radius: 4px;
-  box-sizing: border-box;
-}
-
+.add-form input,
 .add-form select {
   width: 100%;
   padding: 8px 10px;
   font-size: 0.95rem;
-  border: 1px solid #545454;
-  border-radius: 4px;
+  border: 2px solid #6b4c8a;
+  border-radius: 6px;
   box-sizing: border-box;
+  background-color: rgba(255, 255, 255, 0.95);
+  font-family: inherit;
+}
+
+.add-form input:focus,
+.add-form select:focus {
+  outline: none;
+  border-color: #9c7bc0;
+  box-shadow: 0 0 0 3px rgba(156, 123, 192, 0.3);
 }
 
 .add-form button {
@@ -504,13 +579,22 @@ header h1 {
   cursor: pointer;
   min-height: 36px;
   border: none;
-  background-color: #1565c0;
+  background: linear-gradient(135deg, #7c4daf 0%, #9c6bc0 100%);
   color: white;
-  border-radius: 4px;
+  border-radius: 6px;
+  font-family: inherit;
+  font-weight: 500;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .add-form button:hover {
-  background-color: #0d47a1;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(124, 77, 175, 0.4);
+}
+
+.add-form button:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(156, 123, 192, 0.5);
 }
 
 .controls {
@@ -534,9 +618,17 @@ header h1 {
 .controls select {
   padding: 8px 12px;
   font-size: 1rem;
-  border: 1px solid #545454;
-  border-radius: 4px;
+  border: 2px solid #6b4c8a;
+  border-radius: 6px;
   min-height: 44px;
+  background-color: rgba(255, 255, 255, 0.95);
+  font-family: inherit;
+}
+
+.controls select:focus {
+  outline: none;
+  border-color: #9c7bc0;
+  box-shadow: 0 0 0 3px rgba(156, 123, 192, 0.3);
 }
 
 .category-tag {
@@ -544,7 +636,7 @@ header h1 {
   padding: 2px 6px;
   background-color: #e0e0e0;
   border-radius: 4px;
-  font-size: 0.7rem;
+  font-size: 0.85rem;
   color: #1a1a1a;
 }
 
@@ -654,8 +746,8 @@ li {
 }
 
 .drag-handle:focus {
-  outline: 2px solid #1565c0;
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(124, 77, 175, 0.4);
   color: #1a1a1a;
 }
 
@@ -669,29 +761,31 @@ li input[type="checkbox"] {
   height: 18px;
   margin: 0 12px 0 0;
   cursor: pointer;
-  accent-color: #1565c0;
+  accent-color: #7c4daf;
 }
 
-/* Item being dragged in the list (faded out) */
+/* Item being dragged - elevated with shadow, no transition to prevent flying animation */
 .is-dragging {
-  opacity: 0.3;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+  transition: none !important;
 }
 
-/* Drop placeholder - shows where item will land */
+/* Item that was just dropped - disable TransitionGroup animation */
+.just-dropped {
+  transition: none !important;
+}
+
+/* Invisible placeholder - takes up space for animation */
 .drop-placeholder {
-  background-color: #e3f2fd;
-  border: 2px dashed #1565c0;
-  border-radius: 4px;
-}
-
-.placeholder-content {
-  height: 20px;
+  background: transparent !important;
+  border: none;
 }
 
 .delete-btn {
   background: none;
   border: 1px solid transparent;
-  color: #545454;
+  color: #6b4c8a;
   font-size: 1.25rem;
   cursor: pointer;
   padding: 4px;
@@ -709,8 +803,8 @@ li input[type="checkbox"] {
 }
 
 .delete-btn:focus {
-  outline: 2px solid #1565c0;
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(124, 77, 175, 0.4);
 }
 
 .item-name {
@@ -721,7 +815,7 @@ li input[type="checkbox"] {
   min-height: 20px;
   display: flex;
   align-items: center;
-  font-size: 0.95rem;
+  font-size: 1.1rem;
 }
 
 .item-name:hover {
@@ -729,8 +823,8 @@ li input[type="checkbox"] {
 }
 
 .item-name:focus {
-  outline: 2px solid #1565c0;
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(124, 77, 175, 0.4);
   background-color: #f0f0f0;
 }
 
@@ -738,73 +832,78 @@ li input[type="checkbox"] {
   flex: 1;
   padding: 8px 12px;
   font-size: 1rem;
-  border: 2px solid #1565c0;
-  border-radius: 4px;
+  border: 2px solid #7c4daf;
+  border-radius: 6px;
   min-height: 40px;
+  font-family: inherit;
 }
 
 .edit-input:focus {
-  outline: 2px solid #1565c0;
-  outline-offset: 2px;
+  outline: none;
+  border-color: #9c7bc0;
+  box-shadow: 0 0 0 3px rgba(156, 123, 192, 0.3);
 }
 
 .edit-category {
   padding: 8px;
   font-size: 0.875rem;
-  border: 2px solid #1565c0;
-  border-radius: 4px;
+  border: 2px solid #7c4daf;
+  border-radius: 6px;
   min-height: 40px;
+  font-family: inherit;
 }
 
 .edit-category:focus {
-  outline: 2px solid #1565c0;
-  outline-offset: 2px;
+  outline: none;
+  border-color: #9c7bc0;
+  box-shadow: 0 0 0 3px rgba(156, 123, 192, 0.3);
 }
 
 .save-btn {
   padding: 8px 16px;
   font-size: 0.875rem;
-  background-color: #1565c0;
+  background: linear-gradient(135deg, #7c4daf 0%, #9c6bc0 100%);
   color: white;
   border: none;
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
   min-height: 40px;
+  font-family: inherit;
+  font-weight: 500;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .save-btn:hover {
-  background-color: #0d47a1;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(124, 77, 175, 0.4);
 }
 
 .save-btn:focus {
-  outline: 2px solid #1a1a1a;
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(156, 123, 192, 0.5);
 }
 
 .cancel-btn {
   padding: 8px 16px;
   font-size: 0.875rem;
-  background-color: #f5f5f5;
-  color: #1a1a1a;
-  border: 1px solid #545454;
-  border-radius: 4px;
+  background-color: rgba(255, 255, 255, 0.9);
+  color: #4a2c6a;
+  border: 2px solid #6b4c8a;
+  border-radius: 6px;
   cursor: pointer;
   min-height: 40px;
+  font-family: inherit;
+  font-weight: 500;
+  transition: background-color 0.15s ease;
 }
 
 .cancel-btn:hover {
-  background-color: #e0e0e0;
+  background-color: rgba(235, 230, 245, 0.95);
 }
 
 .cancel-btn:focus {
-  outline: 2px solid #1565c0;
-  outline-offset: 2px;
-}
-
-/* Focus visible for keyboard users */
-*:focus-visible {
-  outline: 2px solid #1565c0;
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(156, 123, 192, 0.5);
 }
 
 /* Responsive design for mobile */
@@ -891,21 +990,9 @@ body {
   margin: 0;
 }
 
-/* Global styles for the floating drag clone (appended to body) */
-.drag-clone {
-  background-color: rgba(255, 255, 255, 0.95) !important;
-  border-radius: 8px !important;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4) !important;
-  list-style: none !important;
-  z-index: 1000;
-  pointer-events: none;
-  font-family: 'Barlow Condensed', system-ui, sans-serif;
-  color: #1a1a1a;
-}
-
 /* Ensure consistent focus styles globally */
 *:focus {
-  outline: 2px solid #1565c0;
+  outline: 2px solid #9c7bc0;
   outline-offset: 2px;
 }
 
@@ -915,7 +1002,7 @@ body {
 }
 
 *:focus-visible {
-  outline: 2px solid #1565c0;
+  outline: 2px solid #9c7bc0;
   outline-offset: 2px;
 }
 </style>
