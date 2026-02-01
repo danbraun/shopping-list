@@ -791,7 +791,7 @@ li input[type="checkbox"] {
   padding: 4px;
   min-width: 28px;
   min-height: 28px;
-  display: flex;
+  display: none;
   align-items: center;
   justify-content: center;
   border-radius: 4px;
@@ -805,6 +805,10 @@ li input[type="checkbox"] {
 .delete-btn:focus {
   outline: none;
   box-shadow: 0 0 0 2px rgba(124, 77, 175, 0.4);
+}
+
+li:has(.edit-input) .delete-btn {
+  display: flex;
 }
 
 .item-name {
@@ -943,7 +947,7 @@ li input[type="checkbox"] {
 
   li {
     flex-wrap: nowrap;
-    padding: 4px;
+    padding: 4px 8px 4px 4px;
   }
 
   li:has(.edit-input) {
