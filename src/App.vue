@@ -8,6 +8,34 @@ const store = useShoppingListStore()
 const newItemName = ref('')
 const newItemCategory = ref('Other')
 
+// Modal state
+const showModal = ref(false)
+const addButtonRef = ref(null)
+
+function openModal() {
+  showModal.value = true
+  document.documentElement.style.overflow = 'hidden'
+  document.body.style.overflow = 'hidden'
+  document.addEventListener('keydown', handleModalKeydown)
+  nextTick(() => {
+    document.getElementById('new-item-name')?.focus()
+  })
+}
+
+function closeModal() {
+  showModal.value = false
+  document.documentElement.style.overflow = ''
+  document.body.style.overflow = ''
+  document.removeEventListener('keydown', handleModalKeydown)
+  nextTick(() => {
+    addButtonRef.value?.focus()
+  })
+}
+
+function handleModalKeydown(event) {
+  if (event.key === 'Escape') closeModal()
+}
+
 // Editing state
 const editingId = ref(null)
 const editingName = ref('')
@@ -62,8 +90,10 @@ const displayItems = computed(() => {
 })
 
 function handleAddItem() {
+  if (!newItemName.value.trim()) return
   store.addItem(newItemName.value, newItemCategory.value)
   newItemName.value = ''
+  closeModal()
 }
 
 function startEditing(item) {
@@ -446,24 +476,41 @@ onUnmounted(() => {
         </TransitionGroup>
       </section>
 
-      <!-- Add new item form -->
-      <form @submit.prevent="handleAddItem" class="add-form" aria-label="Add new item">
-        <div class="form-field">
-          <label for="new-item-name" class="sr-only">Item name</label>
-          <input id="new-item-name" v-model="newItemName" type="text" placeholder="Add an item..." autocomplete="off" />
-        </div>
-        <div class="form-field">
-          <label for="new-item-category" class="sr-only">Category</label>
-          <select id="new-item-category" v-model="newItemCategory">
-            <option v-for="category in store.categories" :key="category" :value="category">
-              {{ category }}
-            </option>
-          </select>
-        </div>
-        <button type="submit">Add</button>
-      </form>
     </main>
   </div>
+
+  <!-- Fixed add button bar -->
+  <div class="add-bar">
+    <button ref="addButtonRef" type="button" class="add-bar-btn" @click="openModal">+ Add Item</button>
+  </div>
+
+  <!-- Add item modal -->
+  <Teleport to="body">
+    <div v-if="showModal" class="modal-overlay" @click.self="closeModal">
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <h2 id="modal-title" class="modal-title">Add Item</h2>
+        <form @submit.prevent="handleAddItem" class="modal-form">
+          <div class="modal-field">
+            <label for="new-item-name">Item name</label>
+            <input id="new-item-name" v-model="newItemName" type="text" placeholder="Enter item name..."
+              autocomplete="off" />
+          </div>
+          <div class="modal-field">
+            <label for="new-item-category">Category</label>
+            <select id="new-item-category" v-model="newItemCategory">
+              <option v-for="category in store.categories" :key="category" :value="category">
+                {{ category }}
+              </option>
+            </select>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="modal-cancel-btn" @click="closeModal">Cancel</button>
+            <button type="submit" class="modal-add-btn">Add</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -505,7 +552,7 @@ onUnmounted(() => {
 .container {
   max-width: 500px;
   margin: 0 auto;
-  padding: 20px;
+  padding: 20px 20px 100px;
   font-family: 'Barlow Condensed', system-ui, sans-serif;
   color: #f5f0ff;
 }
@@ -540,59 +587,161 @@ header h1 {
   flex: 1;
 }
 
-.add-form {
+/* Fixed add button bar */
+.add-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background-color: #1a0a2e;
+  padding: 16px 20px;
   display: flex;
-  gap: 10px;
-  margin-top: 20px;
-  padding-top: 20px;
-  border-top: 1px solid rgba(255, 255, 255, 0.3);
-  flex-wrap: wrap;
+  justify-content: center;
+  z-index: 50;
+  font-family: 'Barlow Condensed', system-ui, sans-serif;
 }
 
-.form-field {
-  flex: 1;
-  min-width: 120px;
+.add-bar-btn {
+  background: linear-gradient(135deg, #7c4daf 0%, #9c6bc0 100%);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 12px 40px;
+  font-size: 1rem;
+  font-family: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 44px;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
-.add-form input,
-.add-form select {
-  width: 100%;
-  padding: 8px 10px;
+.add-bar-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(124, 77, 175, 0.4);
+}
+
+.add-bar-btn:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(156, 123, 192, 0.5);
+}
+
+/* Modal overlay */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  touch-action: none;
+  padding-inline: 1rem;
+}
+
+/* Modal panel */
+.modal-panel {
+  background: #2d1b4e;
+  border-radius: 12px;
+  padding: 28px 24px 24px;
+  width: 90%;
+  max-width: 440px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  font-family: 'Barlow Condensed', system-ui, sans-serif;
+}
+
+.modal-title {
+  color: #f5f0ff;
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0 0 20px;
+  font-family: 'Barlow Condensed', system-ui, sans-serif;
+}
+
+.modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.modal-field label {
+  color: #d4c4f0;
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.modal-field input,
+.modal-field select {
+  padding: 10px 12px;
   font-size: 0.95rem;
   border: 2px solid #6b4c8a;
   border-radius: 6px;
-  box-sizing: border-box;
   background-color: rgba(255, 255, 255, 0.95);
   font-family: inherit;
+  box-sizing: border-box;
+  width: 100%;
 }
 
-.add-form input:focus,
-.add-form select:focus {
+.modal-field input:focus,
+.modal-field select:focus {
   outline: none;
   border-color: #9c7bc0;
   box-shadow: 0 0 0 3px rgba(156, 123, 192, 0.3);
 }
 
-.add-form button {
-  padding: 8px 16px;
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.modal-cancel-btn {
+  padding: 10px 20px;
   font-size: 0.95rem;
-  cursor: pointer;
-  min-height: 36px;
-  border: none;
-  background: linear-gradient(135deg, #7c4daf 0%, #9c6bc0 100%);
-  color: white;
+  background-color: rgba(255, 255, 255, 0.1);
+  color: #d4c4f0;
+  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 6px;
+  cursor: pointer;
   font-family: inherit;
   font-weight: 500;
+  transition: background-color 0.15s ease;
+}
+
+.modal-cancel-btn:hover {
+  background-color: rgba(255, 255, 255, 0.18);
+}
+
+.modal-cancel-btn:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(156, 123, 192, 0.5);
+}
+
+.modal-add-btn {
+  padding: 10px 24px;
+  font-size: 0.95rem;
+  background: linear-gradient(135deg, #7c4daf 0%, #9c6bc0 100%);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 600;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
-.add-form button:hover {
+.modal-add-btn:hover {
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(124, 77, 175, 0.4);
 }
 
-.add-form button:focus {
+.modal-add-btn:focus {
   outline: none;
   box-shadow: 0 0 0 3px rgba(156, 123, 192, 0.5);
 }
@@ -913,21 +1062,7 @@ li:has(.edit-input) .delete-btn {
 /* Responsive design for mobile */
 @media (max-width: 480px) {
   .container {
-    padding: 16px;
-  }
-
-  .add-form {
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  .form-field {
-    width: 100%;
-    min-width: unset;
-  }
-
-  .add-form button {
-    width: 100%;
+    padding: 16px 16px 100px;
   }
 
   .controls {
