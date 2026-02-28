@@ -435,7 +435,7 @@ onUnmounted(() => {
           <li v-for="item in store.completedItems" :key="item.id">
             <input type="checkbox" :id="`completed-${item.id}`" v-model="item.completed"
               :aria-label="`Mark ${item.name} as incomplete`" />
-            <label :for="`completed-${item.id}`" class="completed-label">
+            <label :for="`completed-${item.id}`" class="completed-label" @click.prevent>
               <span class="completed-text">{{ item.name }}</span>
               <span class="category-tag" :class="'category-' + item.category.toLowerCase()" aria-label="Category">{{
                 item.category }}</span>
