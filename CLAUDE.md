@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Rules
+
+- **Never commit or push to git** unless explicitly requested by the user.
+
 ## Development Commands
 
 - `npm run dev` - Start Vite dev server with hot-reload
