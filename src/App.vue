@@ -991,6 +991,7 @@ body {
       #4a2c6a 70%,
       #6b4c8a 100%);
   background-attachment: fixed;
+  background-color: #6b4c8a;
   margin: 0;
 }
 
