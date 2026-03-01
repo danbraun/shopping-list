@@ -1065,6 +1065,12 @@ li:has(.edit-input) .delete-btn {
     padding: 16px 16px 100px;
   }
 
+  /* Pin modal to top so the keyboard doesn't cover it when a field is focused */
+  .modal-overlay {
+    align-items: flex-start;
+    padding-top: 1.5rem;
+  }
+
   .controls {
     flex-direction: column;
     gap: 12px;
