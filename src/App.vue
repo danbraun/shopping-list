@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, nextTick, onUnmounted } from 'vue'
+import { ref, nextTick } from 'vue'
 import { useShoppingListStore } from './stores/shoppingList'
 
 const store = useShoppingListStore()
@@ -41,54 +41,6 @@ const editingId = ref(null)
 const editingName = ref('')
 const editingCategory = ref('')
 
-// Screen reader announcements
-const announcement = ref('')
-function announce(message) {
-  announcement.value = ''
-  nextTick(() => {
-    announcement.value = message
-  })
-}
-
-// ============================================
-// CUSTOM DRAG & DROP SYSTEM
-// ============================================
-// Supports both mouse and touch interactions - NO CLONING
-
-// Reactive state (template will update when these change)
-const draggedItem = ref(null)      // The item being dragged
-const dropIndex = ref(-1)          // Where the item will be dropped (for visual gap)
-const draggedItemHeight = ref(0)   // Height of dragged item (for placeholder)
-const draggedItemWidth = ref(0)    // Width of dragged item
-const dragTop = ref(0)             // Current top position for fixed positioning
-const dragLeft = ref(0)            // Current left position for fixed positioning
-const justDroppedId = ref(null)    // ID of item that was just dropped (to skip animation)
-
-// Non-reactive tracking (internal use only)
-let draggedIndex = -1              // Original index of dragged item
-let draggedEl = null               // Reference to the actual dragged DOM element
-let dragStartY = 0                 // Pointer Y when drag started
-let pointerOffsetY = 0             // Offset from top of item where pointer grabbed
-let itemStartTop = 0               // Initial top position of the item
-let itemHeight = 0                 // Height of dragged item (internal use)
-const DRAG_DEADZONE = 15           // Pixels to move before position detection starts
-
-// Computed: items with placeholder inserted at drop position
-const displayItems = computed(() => {
-  const items = [...store.activeItems]
-  if (draggedItem.value && dropIndex.value >= 0) {
-    // Insert placeholder at drop position (dragged item is rendered with position:fixed, so needs placeholder for space)
-    const placeholder = { id: 'drop-placeholder', isPlaceholder: true }
-    // Adjust insertion point based on whether we're moving up or down
-    if (dropIndex.value > draggedIndex) {
-      items.splice(dropIndex.value + 1, 0, placeholder)
-    } else {
-      items.splice(dropIndex.value, 0, placeholder)
-    }
-  }
-  return items
-})
-
 function handleAddItem() {
   if (!newItemName.value.trim()) return
   store.addItem(newItemName.value, newItemCategory.value)
@@ -100,7 +52,6 @@ function startEditing(item) {
   editingId.value = item.id
   editingName.value = item.name
   editingCategory.value = item.category
-  announce(`Editing ${item.name}`)
   nextTick(() => {
     document.querySelector('.edit-input')?.focus()
   })
@@ -133,241 +84,10 @@ function handleEditKeydown(event) {
     cancelEdit()
   }
 }
-
-// Get clientY from pointer or touch event
-function getClientY(event) {
-  if (event.touches && event.touches.length > 0) {
-    return event.touches[0].clientY
-  }
-  return event.clientY
-}
-
-// Start dragging when user presses on the handle
-function startDrag(event, item, index) {
-  // Ignore if drag is already in progress
-  if (draggedItem.value !== null) {
-    return
-  }
-
-  // Prevent text selection and default behavior
-  event.preventDefault()
-
-  // Get the item element
-  const itemEl = event.target.closest('li')
-  const itemRect = itemEl.getBoundingClientRect()
-
-  itemHeight = itemEl.offsetHeight
-  draggedItemHeight.value = itemHeight
-  draggedItemWidth.value = itemEl.offsetWidth
-  itemStartTop = itemRect.top
-  dragStartY = getClientY(event)
-  pointerOffsetY = dragStartY - itemRect.top
-
-  // Set initial fixed position (where item currently is)
-  dragTop.value = itemRect.top
-  dragLeft.value = itemRect.left
-
-  // Store reference to actual DOM element
-  draggedEl = itemEl
-  draggedIndex = index
-  draggedItem.value = item
-  dropIndex.value = index
-  justDroppedId.value = null
-
-  // Set grabbing cursor on body during drag
-  document.body.style.cursor = 'grabbing'
-
-  // Add event listeners for both pointer and touch events
-  document.addEventListener('pointermove', onDrag)
-  document.addEventListener('pointerup', endDrag)
-  document.addEventListener('pointercancel', endDrag)
-  document.addEventListener('touchmove', onDrag, { passive: false })
-  document.addEventListener('touchend', endDrag)
-  document.addEventListener('touchcancel', endDrag)
-
-  announce(`Grabbed ${item.name}. Use arrow keys or drag to reorder.`)
-}
-
-// Called continuously as the pointer/touch moves
-function onDrag(event) {
-  if (!draggedEl) return
-
-  // Prevent scrolling on touch devices while dragging
-  event.preventDefault()
-
-  const clientY = getClientY(event)
-
-  // Update fixed position - item follows pointer
-  dragTop.value = clientY - pointerOffsetY
-
-  // Calculate delta from start for deadzone check
-  const deltaY = clientY - dragStartY
-
-  // Don't change drop position until we've moved past the deadzone
-  if (Math.abs(deltaY) < DRAG_DEADZONE) {
-    return
-  }
-
-  // Item edges relative to viewport (using fixed position)
-  const itemCurrentTop = dragTop.value
-  const itemCurrentBottom = itemCurrentTop + itemHeight
-
-  // Get all non-placeholder, non-dragging items from DOM with their positions
-  const listEl = document.querySelector('.item-list')
-  if (!listEl) return
-
-  const allItems = listEl.querySelectorAll('li:not(.drop-placeholder):not(.is-dragging)')
-  const itemData = []
-
-  for (const li of allItems) {
-    const rect = li.getBoundingClientRect()
-    itemData.push({
-      center: rect.top + rect.height / 2,
-      top: rect.top,
-      bottom: rect.bottom
-    })
-  }
-
-  const maxIndex = store.activeItems.length - 1
-
-  // Determine movement direction based on item position vs starting position
-  const originalCenter = itemStartTop + itemHeight / 2
-  const currentCenter = itemCurrentTop + itemHeight / 2
-  const movingDown = currentCenter > originalCenter
-
-  // Pure hit detection: count items whose center is above the relevant edge
-  // Moving down: use bottom edge (items shuffle up when bottom crosses their center)
-  // Moving up: use top edge (items shuffle down when top crosses their center)
-  const relevantEdge = movingDown ? itemCurrentBottom : itemCurrentTop
-
-  let newDropIndex = 0
-  for (let i = 0; i < itemData.length; i++) {
-    if (relevantEdge > itemData[i].center) {
-      newDropIndex = i + 1
-    }
-  }
-
-  // Clamp to valid range
-  newDropIndex = Math.max(0, Math.min(newDropIndex, maxIndex))
-  dropIndex.value = newDropIndex
-}
-
-// Called when pointer/touch is released
-function endDrag() {
-  // Remove all document listeners
-  document.removeEventListener('pointermove', onDrag)
-  document.removeEventListener('pointerup', endDrag)
-  document.removeEventListener('pointercancel', endDrag)
-  document.removeEventListener('touchmove', onDrag)
-  document.removeEventListener('touchend', endDrag)
-  document.removeEventListener('touchcancel', endDrag)
-
-  // Reset cursor
-  document.body.style.cursor = ''
-
-  const movedItem = draggedItem.value
-  const finalDropIndex = dropIndex.value
-  const positionChanged = movedItem && finalDropIndex !== draggedIndex
-
-  if (positionChanged) {
-    // Mark this item as just dropped to skip TransitionGroup animation
-    justDroppedId.value = movedItem.id
-
-    // Update store with new order
-    const newOrder = store.activeItems.filter(item => item.id !== movedItem.id)
-    newOrder.splice(finalDropIndex, 0, movedItem)
-    store.reorderActiveItems(newOrder)
-    announce(`${movedItem.name} moved to position ${finalDropIndex + 1}`)
-
-    // Clear just-dropped flag after animation frame
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        justDroppedId.value = null
-      })
-    })
-  } else if (movedItem) {
-    announce(`${movedItem.name} dropped in original position`)
-  }
-
-  // Reset drag state (but not justDroppedId - that clears separately)
-  draggedItem.value = null
-  dropIndex.value = -1
-  draggedItemHeight.value = 0
-  draggedItemWidth.value = 0
-  dragTop.value = 0
-  dragLeft.value = 0
-  draggedIndex = -1
-  draggedEl = null
-  itemStartTop = 0
-  itemHeight = 0
-  pointerOffsetY = 0
-}
-
-// Reset all drag state variables
-function resetDragState() {
-  draggedItem.value = null
-  dropIndex.value = -1
-  draggedItemHeight.value = 0
-  draggedItemWidth.value = 0
-  dragTop.value = 0
-  dragLeft.value = 0
-  justDroppedId.value = null
-  draggedIndex = -1
-  draggedEl = null
-  itemStartTop = 0
-  itemHeight = 0
-  pointerOffsetY = 0
-  document.body.style.cursor = ''
-}
-
-// Keyboard-based reordering for accessibility
-function handleDragKeydown(event, item, index) {
-  if (event.key === 'ArrowUp' && index > 0) {
-    event.preventDefault()
-    const newOrder = [...store.activeItems]
-    newOrder.splice(index, 1)
-    newOrder.splice(index - 1, 0, item)
-    store.reorderActiveItems(newOrder)
-    announce(`${item.name} moved up to position ${index}`)
-    // Keep focus on the moved item
-    nextTick(() => {
-      const handles = document.querySelectorAll('.drag-handle')
-      handles[index - 1]?.focus()
-    })
-  } else if (event.key === 'ArrowDown' && index < store.activeItems.length - 1) {
-    event.preventDefault()
-    const newOrder = [...store.activeItems]
-    newOrder.splice(index, 1)
-    newOrder.splice(index + 1, 0, item)
-    store.reorderActiveItems(newOrder)
-    announce(`${item.name} moved down to position ${index + 2}`)
-    // Keep focus on the moved item
-    nextTick(() => {
-      const handles = document.querySelectorAll('.drag-handle')
-      handles[index + 1]?.focus()
-    })
-  }
-}
-
-// Cleanup if component unmounts during drag
-onUnmounted(() => {
-  document.removeEventListener('pointermove', onDrag)
-  document.removeEventListener('pointerup', endDrag)
-  document.removeEventListener('pointercancel', endDrag)
-  document.removeEventListener('touchmove', onDrag)
-  document.removeEventListener('touchend', endDrag)
-  document.removeEventListener('touchcancel', endDrag)
-  resetDragState()
-})
 </script>
 
 <template>
   <div class="container">
-    <!-- Screen reader announcements -->
-    <div role="status" aria-live="polite" aria-atomic="true" class="sr-only">
-      {{ announcement }}
-    </div>
-
     <header>
       <h1>Shopping List</h1>
     </header>
@@ -378,7 +98,6 @@ onUnmounted(() => {
         <div class="control-field">
           <label for="sort-select">Sort:</label>
           <select id="sort-select" :value="store.sortOrder" @change="store.setSortOrder($event.target.value)">
-            <option value="none">Manual order</option>
             <option value="category">By category</option>
             <option value="a-z">A to Z</option>
             <option value="z-a">Z to A</option>
@@ -397,68 +116,46 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- Active items with custom drag & drop -->
+      <!-- Active items -->
       <TransitionGroup name="list" tag="ul" class="item-list" aria-label="Shopping items">
-        <li v-for="(item, index) in displayItems" :key="item.id" :class="{
-          'drop-placeholder': item.isPlaceholder,
-          'is-dragging': draggedItem?.id === item.id,
-          'just-dropped': justDroppedId === item.id
-        }" :style="item.isPlaceholder
-          ? { height: draggedItemHeight + 'px', padding: 0, minHeight: 'auto' }
-          : draggedItem?.id === item.id
-            ? { position: 'fixed', top: dragTop + 'px', left: dragLeft + 'px', width: draggedItemWidth + 'px', zIndex: 1000, margin: 0 }
-            : {}">
-          <!-- Invisible placeholder for animation -->
-          <template v-if="item.isPlaceholder">
-            <span aria-hidden="true"></span>
+        <li v-for="item in store.activeItems" :key="item.id">
+          <input type="checkbox" :id="`item-${item.id}`" v-model="item.completed"
+            :aria-label="`Mark ${item.name} as ${item.completed ? 'incomplete' : 'complete'}`" />
+
+          <!-- Editing mode -->
+          <template v-if="editingId === item.id">
+            <label :for="`edit-name-${item.id}`" class="sr-only">Edit item name</label>
+            <input :id="`edit-name-${item.id}`" v-model="editingName" class="edit-input"
+              @keydown="handleEditKeydown" />
+            <label :for="`edit-category-${item.id}`" class="sr-only">Edit category</label>
+            <select :id="`edit-category-${item.id}`" v-model="editingCategory" class="edit-category"
+              @keydown="handleEditKeydown">
+              <option v-for="category in store.categories" :key="category" :value="category">
+                {{ category }}
+              </option>
+            </select>
+            <button class="save-btn" @click="saveEdit">Save</button>
+            <button type="button" class="cancel-btn" @click="cancelEdit">Cancel</button>
           </template>
 
-          <!-- Regular item -->
+          <!-- Display mode -->
           <template v-else>
-            <!-- Drag handle with keyboard and pointer support -->
-            <div role="button" tabindex="0" class="drag-handle"
-              :aria-label="`Reorder ${item.name}. Use arrow keys to move.`"
-              @pointerdown="startDrag($event, item, index)" @touchstart="startDrag($event, item, index)"
-              @keydown="handleDragKeydown($event, item, index)">⠿</div>
-
-            <input type="checkbox" :id="`item-${item.id}`" v-model="item.completed"
-              :aria-label="`Mark ${item.name} as ${item.completed ? 'incomplete' : 'complete'}`" />
-
-            <!-- Editing mode -->
-            <template v-if="editingId === item.id">
-              <label :for="`edit-name-${item.id}`" class="sr-only">Edit item name</label>
-              <input :id="`edit-name-${item.id}`" v-model="editingName" class="edit-input"
-                @keydown="handleEditKeydown" />
-              <label :for="`edit-category-${item.id}`" class="sr-only">Edit category</label>
-              <select :id="`edit-category-${item.id}`" v-model="editingCategory" class="edit-category"
-                @keydown="handleEditKeydown">
-                <option v-for="category in store.categories" :key="category" :value="category">
-                  {{ category }}
-                </option>
-              </select>
-              <button class="save-btn" @click="saveEdit">Save</button>
-              <button type="button" class="cancel-btn" @click="cancelEdit">Cancel</button>
-            </template>
-
-            <!-- Display mode -->
-            <template v-else>
-              <span class="item-name" role="button" tabindex="0"
-                :aria-label="`${item.name}. Click or press Enter to edit.`" @click="startEditing(item)"
-                @keydown="handleItemKeydown($event, item)">{{ item.name }}</span>
-              <span class="category-tag" :class="'category-' + item.category.toLowerCase()" aria-label="Category">{{
-                item.category }}</span>
-            </template>
-
-            <button type="button" class="delete-btn" :aria-label="`Delete ${item.name}`"
-              @click="store.deleteItem(item.id)">×</button>
+            <span class="item-name" role="button" tabindex="0"
+              :aria-label="`${item.name}. Click or press Enter to edit.`" @click="startEditing(item)"
+              @keydown="handleItemKeydown($event, item)">{{ item.name }}</span>
+            <span class="category-tag" :class="'category-' + item.category.toLowerCase()" aria-label="Category">{{
+              item.category }}</span>
           </template>
+
+          <button type="button" class="delete-btn" :aria-label="`Delete ${item.name}`"
+            @click="store.deleteItem(item.id)">×</button>
         </li>
       </TransitionGroup>
 
       <!-- Empty state -->
       <p v-if="store.activeItems.length === 0" class="empty-state">No items to show.</p>
 
-      <!-- Completed items (not draggable) -->
+      <!-- Completed items -->
       <section v-if="store.completedItems.length > 0" class="completed-section" aria-label="Completed items">
         <h2>Completed</h2>
         <TransitionGroup name="list" tag="ul">
@@ -870,40 +567,6 @@ li {
   color: #1a1a1a;
 }
 
-.drag-handle {
-  cursor: grab;
-  color: #545454;
-  padding: 6px 2px 6px 6px;
-  user-select: none;
-  -webkit-user-select: none;
-  -webkit-touch-callout: none;
-  background: none;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  font-size: 1rem;
-  min-width: 28px;
-  min-height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  touch-action: none;
-}
-
-.drag-handle:hover {
-  color: #1a1a1a;
-  background-color: #f0f0f0;
-}
-
-.drag-handle:focus {
-  outline: none;
-  box-shadow: 0 0 0 2px rgba(124, 77, 175, 0.4);
-  color: #1a1a1a;
-}
-
-.drag-handle:active {
-  cursor: grabbing;
-}
-
 /* Checkbox styling */
 li input[type="checkbox"] {
   width: 18px;
@@ -911,24 +574,6 @@ li input[type="checkbox"] {
   margin: 0 12px 0 0;
   cursor: pointer;
   accent-color: #7c4daf;
-}
-
-/* Item being dragged - elevated with shadow, no transition to prevent flying animation */
-.is-dragging {
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-  pointer-events: none;
-  transition: none !important;
-}
-
-/* Item that was just dropped - disable TransitionGroup animation */
-.just-dropped {
-  transition: none !important;
-}
-
-/* Invisible placeholder - takes up space for animation */
-.drop-placeholder {
-  background: transparent !important;
-  border: none;
 }
 
 .delete-btn {
